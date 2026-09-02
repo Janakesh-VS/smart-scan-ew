@@ -304,6 +304,147 @@ the emitter/noise randomness identical across runs isolates the outcome
 difference to the scheduling policy itself, which is what makes the
 baselines a *fair* comparison point rather than an arbitrary one.
 
+## Phase 3 — Evaluation Framework (decisions of record)
+
+Approved by the project owner before implementation. Applies to
+`src/smart_scan_ew/evaluator/`. `SimpleEvaluator` implements the existing
+`Evaluator` interface exactly as declared in Phase 0 — no interface
+change was made or needed (see "Interface stability" below).
+
+### Terminology
+
+- **Detection**: `Observation.detected == True` — receiver-level, no
+  regard to correctness (same meaning as Phase 2's `hit_count`).
+- **True positive**: a detection where ground truth confirms a real
+  emitter was active on the observed band at that instant.
+- **False alarm**: a detection where ground truth shows nothing was
+  active on that band.
+- **Miss**: `detected == False` while ground truth shows something was
+  active on that band.
+- **Interception** (per-emitter, latched, one-time): the first true
+  positive that credits a given emitter. Repeated true positives on an
+  already-intercepted emitter add to raw TP counts but never create a
+  second interception or move `intercept_time`.
+
+### Metric definitions
+
+Given per-step classification (`signal_present` = any ground-truth-active
+emitter on the observed band at that instant):
+
+- **Pd** = `TP / (TP + FN)`, `None` if `TP+FN == 0`. Explicitly a
+  receiver/detector-quality metric, conditional on the receiver already
+  observing an occupied band — **not** a search/interception metric.
+- **Pfa** = `FP / (FP + TN)`, `None` if `FP+TN == 0`.
+- **Interception Rate**: reported as **two** numbers —
+  `interception_rate_all_emitters` (denominator = every emitter in the
+  scenario) and `interception_rate_active_emitters` (denominator = only
+  emitters active at least once during the run). **The active-emitters
+  variant is the primary/headline metric** for presentation and
+  cross-scheduler comparison; the all-emitters variant remains available
+  for auditability (an emitter with a duty cycle longer than the run
+  duration can never be intercepted regardless of scheduler quality, and
+  folding that into one ratio would misattribute a scenario-design
+  limitation to scheduler performance).
+- **Average Intercept Time**: mean of `intercept_time` over intercepted
+  emitters only. `None` if none intercepted. Never-intercepted emitters
+  are excluded, not assigned a censored value — no Kaplan–Meier-style
+  survival analysis in Phase 3 (documented simplification).
+- **Intercept Time Error**: `intercept_time - first_active_time`
+  (`first_active_time` = earliest time, from ground truth across the
+  whole run regardless of receiver tuning, that the emitter was active at
+  all). Interpreted as detection/interception delay from the earliest
+  theoretical opportunity — always `>= 0` by construction. Averaged over
+  intercepted emitters only, same `None` rule as above.
+- **Co-band emitters**: a single true-positive observation credits
+  *every* ground-truth-active emitter on that band simultaneously —
+  documented limitation of the Phase 1 sensing model (`sense()` sums
+  power and cannot distinguish co-band emitters), not a Phase 3 bug.
+- **Average Reward / Cost**: `reward = 1.0 if detected else 0.0`,
+  applied per step (a Phase 3 **placeholder**, not a tuned optimization
+  objective — Phase 4 owns real reward-shaping). `average_reward` = mean
+  over all steps; `average_cost = 1 - average_reward`. Mixes true and
+  false detections together — **not** a substitute for Pd/Pfa.
+- Every metric's raw counts (`true_positive_count`, etc.) are stored
+  alongside the derived ratio specifically so Pd/Pfa can be recomputed by
+  hand from the stored counts — no opaque numbers.
+
+### Reproducibility strategy
+
+`SimpleRFEnvironment`, `SimpleReceiver`, and `RandomScheduler` already
+each own an independent `random.Random` (Phase 1/2 decisions) — no
+component's draws affect any other's. `evaluator/reproducibility.py`'s
+`derive_seeds(master_seed, count)` builds a fixed, documented mapping
+from one master seed to `count` independent sub-seeds (role order:
+0=environment, 1=receiver, 2=scheduler-if-stochastic), using a
+throwaway `random.Random(master_seed)` consumed only for this derivation.
+`compare_baselines()` derives `env_seed`/`receiver_seed` **once** and
+reuses them for all three schedulers, so ground truth and receiver noise
+trajectories are byte-identical across the comparison — the only
+difference between runs is the scheduling policy. Verified directly (not
+just asserted) in `tests/test_reproducibility.py` by comparing raw
+`RunRecord` ground-truth and `measured_power` sequences.
+
+### Experiment lifecycle / reset behavior
+
+`run_experiment_for_scheduler()` (the orchestration layer, not the
+`Evaluator` interface): constructs a fresh `SimpleRFEnvironment` and
+`reset(seed=env_seed)`s it; constructs a fresh `SimpleReceiver(seed=
+receiver_seed)` and `reset()`s it; constructs a fresh `SimpleBeliefState`
+and `reset()`s it; **never reconstructs the scheduler** — only calls
+`scheduler.reset()` on the instance the caller passed in, so a future
+learned scheduler's persistent parameters survive across episodes while
+episode-local counters clear. `SimpleEvaluator.run_experiment()` itself
+resets nothing (matches the Phase 0 `NullEvaluator` fixture convention —
+resetting is the caller's job, before `run_experiment` is invoked).
+
+### Interface stability
+
+No Phase 0/1/2 interface was changed (confirmed by an empty `git diff`
+against every file under `interfaces/`, `environment/`, `receiver/`,
+`state/`, `scheduler/`, and `config.py`). One near-miss considered and
+resolved without a change: `Evaluator.run_experiment()`'s signature has
+no `dt` parameter, so `SimpleEvaluator` takes `dt` (and `reward_fn`) as
+**constructor** parameters instead — the abstract `Evaluator` doesn't
+constrain `__init__`, so this isn't an interface change.
+
+### Ground-truth isolation, extended again
+
+Phase 3 introduces the first *legitimate* caller of `get_ground_truth()`
+(`SimpleEvaluator`, once per step, for its own `StepRecord` only).
+`tests/test_evaluator_ground_truth_isolation.py` proves the boundary
+holds: an environment spy confirms `get_ground_truth()` is called exactly
+once per step (expected now, unlike Phase 1/2's "must be zero"), while a
+*scheduler-argument* spy and *state-argument* spy independently confirm
+neither ever receives anything beyond a plain `State`/`Observation`, and
+that `Observation.info` never carries a `ground_truth`/`emitters`/
+`emitter_id` key (guarding the one deliberately-open field that could
+leak truth in a careless future change). A separate test confirms the
+placeholder reward function's only parameter is the `Observation` itself.
+
+### File layout
+
+```
+src/smart_scan_ew/evaluator/
+    __init__.py
+    records.py        # StepRecord, RunRecord, EmitterInterceptionRecord, ExperimentResult
+    simple_evaluator.py  # SimpleEvaluator(Evaluator)
+    reproducibility.py    # derive_seeds()
+    experiment.py           # ExperimentConfig, run_experiment_for_scheduler()
+    comparison.py            # compare_baselines(), ComparisonResult, run_repeated_trials(), TrialSummary, MetricStats
+```
+
+### Repeated trials
+
+`run_repeated_trials()` is deliberately composable, not combined: it runs
+**one** scheduler across multiple master seeds and reports
+mean/stdev/min/max (stdlib `statistics` only — no confidence intervals or
+bootstrapping) per metric, plus `n_defined` (how many trials had a
+non-`None` value for that metric, since e.g. a scenario where some seeds
+produce zero interceptions leaves `average_intercept_time` undefined for
+those trials). Comparing multiple schedulers across multiple seeds means
+calling this once per scheduler and collecting the `TrialSummary`s
+yourself — no N-scheduler × M-seed combined structure was built.
+
 ## What is deliberately still NOT decided
 
 - The learning algorithm for the eventual learning-based `Scheduler` —

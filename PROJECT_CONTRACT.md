@@ -65,9 +65,15 @@ These are the rules the project owner specified. They apply to every phase:
   `RandomScheduler`, `GreedyRecentHitScheduler`. Ground-truth isolation
   verified across the complete environment→receiver→state→scheduler loop.
   See `ARCHITECTURE.md`'s Phase 2 section for details.
-- **Phase 3 — Evaluation harness.** Real `Evaluator` running experiments
-  end-to-end over classical schedulers, computing real metrics from real
-  runs (no fabricated numbers).
+- **Phase 3 — Evaluation harness (complete).** `SimpleEvaluator`
+  implements the existing `Evaluator` interface unchanged. Additive
+  orchestration (`ExperimentConfig`, `run_experiment_for_scheduler`,
+  `compare_baselines`, `run_repeated_trials`) runs the three baseline
+  schedulers under identical environment/receiver conditions and computes
+  Pd, Pfa, interception rate, average intercept time, intercept time
+  error, and average reward/cost from real recorded runs — raw TP/FP/FN/TN
+  counts are kept alongside every derived ratio. See `ARCHITECTURE.md`'s
+  Phase 3 section for details.
 - **Phase 4 — Learning-based scheduler.** Introduced only once Phase 1–3 are
   solid and only with explicit sign-off, per rule 9.
 - **Phase 5 — Dashboard.** Visualizes evaluator output; no direct access to
@@ -98,6 +104,13 @@ the next.
   rules and tie-breaks, `num_bands` as an explicit constructor argument
   rather than a shared config object) were explicitly approved by the
   owner and are recorded in `ARCHITECTURE.md`'s "Phase 2" section.
+- **Phase 3** decisions (exact Pd/Pfa/interception/timing/reward
+  definitions, the seed-derivation reproducibility strategy, co-band
+  emitter credit-sharing, never-intercepted-emitter handling, the
+  five-file `evaluator/` layout) were explicitly approved by the owner
+  and are recorded in `ARCHITECTURE.md`'s "Phase 3" section. No Phase
+  0/1/2 interface was modified — confirmed by an empty `git diff` against
+  every existing interface/implementation file.
 - Remaining open items (config file format, the eventual learning
   algorithm) are listed in `ARCHITECTURE.md` under "What is deliberately
   still NOT decided" and will be raised again when the relevant phase

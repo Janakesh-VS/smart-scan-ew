@@ -14,14 +14,15 @@ it has observed so far — never on the true RF environment state.
 
 ## Current Phase
 
-**Phase 2 — Baseline schedulers & belief/state (complete).** A real
-`SimpleBeliefState` (per-band observation count, hit count, last
-detected, last observed time, time since last observed, estimated
-probability — derived strictly from `Observation`s) and three baseline
-`Scheduler` implementations (`RoundRobinScheduler`, `RandomScheduler`,
-`GreedyRecentHitScheduler`) now exist under `src/smart_scan_ew/state/`
-and `src/smart_scan_ew/scheduler/`. See `ARCHITECTURE.md`'s "Phase 2"
-section for the concrete decisions of record. No `Evaluator`, ML/RL, or
+**Phase 3 — Evaluation framework (complete).** A real `SimpleEvaluator`
+(implements the Phase 0 `Evaluator` interface exactly, no changes), plus
+additive orchestration (`ExperimentConfig`, `run_experiment_for_scheduler`,
+`compare_baselines`, `run_repeated_trials`) now exist under
+`src/smart_scan_ew/evaluator/`. Six metrics (Pd, Pfa, interception rate,
+average intercept time, intercept time error, average reward/cost) are
+computed from real recorded runs, with raw TP/FP/FN/TN counts kept
+alongside every derived ratio for auditability. See `ARCHITECTURE.md`'s
+"Phase 3" section for the concrete decisions of record. No ML/RL or
 dashboard exists yet — see `PROJECT_CONTRACT.md` for the phase plan.
 
 Do not jump ahead of the current phase without the project owner's sign-off.
@@ -76,12 +77,13 @@ src/smart_scan_ew/
     receiver/            # Phase 1: SimpleReceiver
     state/                # Phase 2: SimpleBeliefState, BeliefSnapshot, BandBeliefView
     scheduler/            # Phase 2: RoundRobinScheduler, RandomScheduler, GreedyRecentHitScheduler
+    evaluator/            # Phase 3: SimpleEvaluator, ExperimentConfig, compare_baselines, run_repeated_trials
 tests/                 # one test module per interface/contract for now
 ```
 
-Future concrete modules (evaluator, learning-based scheduler, dashboard)
-will each get their own subpackage under `src/smart_scan_ew/`,
-implementing the interfaces defined in `src/smart_scan_ew/interfaces/`.
+Future concrete modules (learning-based scheduler, dashboard) will each
+get their own subpackage under `src/smart_scan_ew/`, implementing the
+interfaces defined in `src/smart_scan_ew/interfaces/`.
 
 ## Before adding a new module
 
