@@ -1,0 +1,9 @@
+# Phase 0 (foundation) dependencies only.
+# Add a new dependency here only when a concrete module actually needs it,
+# and note why in a comment — see CLAUDE.md rule 13.
+
+pytest>=7.0
+
+# Anticipated, NOT yet added (uncomment when the module that needs it lands):
+# numpy            # numeric arrays for RF signal/emitter modeling (Phase 1)
+# matplotlib       # plotting for evaluation/dashboard (Phase 5)
