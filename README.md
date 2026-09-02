@@ -37,6 +37,7 @@ Completed:
 
 Phase 2 complete. Phase 3 will implement the evaluation framework
 and performance metrics for comparing scanning strategies.
+
 ### Running tests
 
 ```bash
