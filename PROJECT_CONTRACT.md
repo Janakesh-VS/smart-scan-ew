@@ -53,9 +53,12 @@ These are the rules the project owner specified. They apply to every phase:
 - **Phase 0 — Foundation (this change).** Docs, folder structure,
   interfaces/contracts, placeholder no-op implementations, import/contract
   tests. No simulation logic, no detection logic, no ML/RL, no dashboard.
-- **Phase 1 — RF environment & receiver.** Real (but simple) emitter models,
-  a real `RFEnvironment`, and a real `Receiver` that produces genuine
-  `Observation`s. Ground-truth isolation verified by tests.
+- **Phase 1 — RF environment & receiver (complete).** Real (but simple)
+  emitter models (`ContinuousWaveEmitter`, `PulsedEmitter`,
+  `FrequencyHoppingEmitter`), a real `RFEnvironment`, and a real
+  `SimpleReceiver` that produces genuine `Observation`s via a seeded
+  Gaussian-noise detection model. Ground-truth isolation verified by
+  tests. See `ARCHITECTURE.md`'s Phase 1 section for details.
 - **Phase 2 — Classical schedulers & belief/state.** Round-robin and one or
   two heuristic schedulers; a real `State`/belief implementation built only
   from observations.
@@ -79,9 +82,15 @@ the next.
 - Dashboard implementation
 - Any performance experiments or numbers
 
-## Open Decisions (owner should review)
+## Decisions Log
 
-See the "Decisions to review" section at the end of the assistant's summary
-message for this change — items such as band representation, config format,
-and package naming were chosen provisionally and may need the owner's input
-before Phase 1 begins.
+- **Phase 0** provisional decisions (band representation, config format,
+  package naming) were reviewed by the owner before Phase 1 began.
+- **Phase 1** decisions (emitter types, noise/detection model, `BandSpec`
+  fields, `default_scenario()`, ground-truth snapshot fields, RNG
+  ownership) were explicitly approved by the owner and are recorded in
+  `ARCHITECTURE.md`'s "Phase 1" section.
+- Remaining open items (state/feature representation, config file format,
+  the eventual learning algorithm) are listed in `ARCHITECTURE.md` under
+  "What is deliberately still NOT decided" and will be raised again when
+  the relevant phase begins.

@@ -129,14 +129,107 @@ A single place for experiment parameters that would otherwise be hard-coded
 defines the dataclass shape only, with clearly named placeholder defaults;
 real values arrive with Phase 1+.
 
-## What is deliberately NOT decided yet
+## Phase 1 — RF Environment & Receiver (decisions of record)
 
-- The concrete `Band` representation beyond "opaque, hashable value."
-- The internal structure of `info` on `Observation`.
+These decisions were approved by the project owner before implementation
+and apply to everything under `src/smart_scan_ew/environment/` and
+`src/smart_scan_ew/receiver/`.
+
+### Band representation
+
+The public `Band` type stays exactly `int`, unchanged from Phase 0. A
+`BandSpec` dataclass (`environment/bands.py`) is used internally by
+`RFEnvironment` to attach frequency metadata to each band index:
+
+- `band_id: int`
+- `center_frequency: float` (Hz)
+- `bandwidth: float` (Hz)
+
+`Receiver`, `State`, and `Scheduler` never see `BandSpec` — only the plain
+`int` `Band` values. Bands are contiguous and non-overlapping by
+construction (a simplification; see Limitations).
+
+### Emitter models
+
+Exactly three emitter types, each a small internal behavior class in
+`environment/emitters.py` (not part of the cross-module `interfaces/`
+contracts — these are implementation details of the environment module,
+same as the rule that emitter behavior lives "inside" `RFEnvironment"
+per `PROJECT_CONTRACT.md`):
+
+- **`ContinuousWaveEmitter`** — always active, fixed band, fixed power.
+- **`PulsedEmitter`** — fixed band, fixed power, but active only during a
+  duty cycle (`pulse_width` on, `period` total).
+- **`FrequencyHoppingEmitter`** — always active, fixed power, but its
+  current band changes every `hop_interval`, chosen from an owned,
+  explicitly seeded RNG (never Python's global `random` module).
+
+All three are built from a single `EmitterSpec` config dataclass (a `kind`
+field selects which behavior class to instantiate) so scenarios are data,
+not hardcoded logic (rule 7). A `default_scenario()` factory
+(`environment/scenarios.py`) provides one instance of each type for
+convenience/demo/testing; callers may instead supply their own explicit
+list of `EmitterSpec`s.
+
+No chirp/swept emitter type is included in Phase 1.
+
+### Noise / detection model
+
+Explicitly a **simplified simulation model, not a physically complete RF
+model**:
+
+- `RFEnvironment.sense(band, t)` returns the sum of the transmit power of
+  whatever emitters are active on `band` at the environment's current
+  time (no propagation, path-loss, antenna, or multipath modeling).
+- `SimpleReceiver` adds independent Gaussian noise (mean 0, configurable
+  `noise_std`) drawn from its own seeded RNG, then thresholds against a
+  configurable `detection_threshold` to set `Observation.detected`.
+- Because noise is additive and can push the measured value either up or
+  down, both **misses** (real transmission present, noise pulls the
+  reading below threshold) and **false alarms** (nothing present, noise
+  pushes the reading above threshold) are possible outcomes — this is
+  intentional and is what makes "smart scanning" a non-trivial problem
+  later.
+
+### Ground truth snapshot
+
+`RFEnvironment.get_ground_truth()` returns a full per-emitter snapshot:
+simulation time, and for each emitter — `emitter_id`, `active` (bool),
+`band` (int), and `power` (float, 0 if inactive). This is Evaluator-only
+information; see "Ground-truth isolation" below.
+
+### RNG ownership
+
+No global random state anywhere. Two independent, explicitly owned and
+seeded RNG instances exist:
+
+- `RFEnvironment` owns one `random.Random` instance (seeded via
+  `reset(seed=...)`, matching the existing interface signature), used for
+  all frequency-hopping band draws. Emitters never create their own RNGs;
+  the environment passes its RNG into each emitter's `advance()` call, and
+  draw order follows a fixed emitter list order — so a given seed
+  reproduces the same run.
+- `SimpleReceiver` owns a separate `random.Random` instance, seeded at
+  construction time (`seed=...` constructor argument) and re-seeded
+  identically on `reset()` (the `Receiver.reset()` interface takes no
+  arguments, so the seed is supplied once, at construction, not per-reset
+  call), used for detection noise.
+
+### Ground-truth isolation (unchanged, now implemented)
+
+`SimpleReceiver.observe()` calls `environment.sense(...)` and nothing
+else. It has no code path that calls `get_ground_truth()`, and a test
+(`tests/test_ground_truth_isolation.py`) uses a spy environment to assert
+this at runtime, not just by code review.
+
+## What is deliberately still NOT decided
+
 - Whether `State.get_features()` returns a dict, a fixed-size vector, or a
-  small custom type — deferred until a scheduler actually needs one.
+  small custom type — deferred until a scheduler actually needs one
+  (Phase 2).
 - The learning algorithm for the eventual learning-based `Scheduler` —
-  intentionally unspecified per the project owner's instruction not to
-  assume the final ML approach.
+  intentionally unspecified.
 - Config file format (dataclass-only for now; whether it's loaded from
   YAML/JSON later is an open decision).
+- Real propagation/antenna/multipath modeling — explicitly out of scope,
+  not just deferred; see Phase 1 Limitations in the implementation summary.

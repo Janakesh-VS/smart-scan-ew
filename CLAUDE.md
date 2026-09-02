@@ -14,9 +14,13 @@ it has observed so far — never on the true RF environment state.
 
 ## Current Phase
 
-**Phase 0 — Foundation.** Only interfaces, contracts, folder structure, and
-placeholder/no-op implementations exist. No RF simulation, emitter model,
-detection logic, ML, RL, or dashboard has been implemented yet. See
+**Phase 1 — RF environment & receiver (complete).** A real (but
+intentionally simple) `RFEnvironment` with three emitter types
+(`ContinuousWaveEmitter`, `PulsedEmitter`, `FrequencyHoppingEmitter`) and a
+real `SimpleReceiver` with a seeded-noise detection model now exist under
+`src/smart_scan_ew/environment/` and `src/smart_scan_ew/receiver/`. See
+`ARCHITECTURE.md`'s "Phase 1" section for the concrete decisions of record.
+No scheduler, belief/state, evaluator, ML/RL, or dashboard exists yet — see
 `PROJECT_CONTRACT.md` for the phase plan.
 
 Do not jump ahead of the current phase without the project owner's sign-off.
