@@ -59,9 +59,12 @@ These are the rules the project owner specified. They apply to every phase:
   `SimpleReceiver` that produces genuine `Observation`s via a seeded
   Gaussian-noise detection model. Ground-truth isolation verified by
   tests. See `ARCHITECTURE.md`'s Phase 1 section for details.
-- **Phase 2 — Classical schedulers & belief/state.** Round-robin and one or
-  two heuristic schedulers; a real `State`/belief implementation built only
-  from observations.
+- **Phase 2 — Classical schedulers & belief/state (complete).**
+  `SimpleBeliefState` (per-band belief derived strictly from
+  `Observation`s) and three baseline schedulers — `RoundRobinScheduler`,
+  `RandomScheduler`, `GreedyRecentHitScheduler`. Ground-truth isolation
+  verified across the complete environment→receiver→state→scheduler loop.
+  See `ARCHITECTURE.md`'s Phase 2 section for details.
 - **Phase 3 — Evaluation harness.** Real `Evaluator` running experiments
   end-to-end over classical schedulers, computing real metrics from real
   runs (no fabricated numbers).
@@ -90,7 +93,12 @@ the next.
   fields, `default_scenario()`, ground-truth snapshot fields, RNG
   ownership) were explicitly approved by the owner and are recorded in
   `ARCHITECTURE.md`'s "Phase 1" section.
-- Remaining open items (state/feature representation, config file format,
-  the eventual learning algorithm) are listed in `ARCHITECTURE.md` under
-  "What is deliberately still NOT decided" and will be raised again when
-  the relevant phase begins.
+- **Phase 2** decisions (belief schema, `BeliefSnapshot`/`BandBeliefView`
+  as `State`'s output type, the three baseline schedulers' exact decision
+  rules and tie-breaks, `num_bands` as an explicit constructor argument
+  rather than a shared config object) were explicitly approved by the
+  owner and are recorded in `ARCHITECTURE.md`'s "Phase 2" section.
+- Remaining open items (config file format, the eventual learning
+  algorithm) are listed in `ARCHITECTURE.md` under "What is deliberately
+  still NOT decided" and will be raised again when the relevant phase
+  begins.

@@ -222,14 +222,97 @@ else. It has no code path that calls `get_ground_truth()`, and a test
 (`tests/test_ground_truth_isolation.py`) uses a spy environment to assert
 this at runtime, not just by code review.
 
+## Phase 2 — Belief/State & Baseline Schedulers (decisions of record)
+
+Approved by the project owner before implementation. Applies to
+`src/smart_scan_ew/state/` and `src/smart_scan_ew/scheduler/`.
+
+### State output shape (resolves the Phase 0/1 open item)
+
+`State.get_features()` for `SimpleBeliefState` returns a `BeliefSnapshot`
+(frozen dataclass): `current_time: float` and `bands: tuple[BandBeliefView, ...]`
+— one entry per band, `0..num_bands-1`, always present even if a band has
+never been observed. Each `BandBeliefView` (also frozen) carries:
+`band_id`, `observation_count`, `hit_count`, `last_detected` (`bool | None`),
+`last_observed_time` (`float | None`), `time_since_last_observed`
+(`float | None`), `estimated_probability` (`float | None`, a plain
+`hit_count / observation_count` ratio — no smoothing, prior, or decay).
+This is a typed, explicit choice over a generic `dict`, made specifically
+so Phase 2 schedulers (and later the evaluator/ML scheduler) have a
+stable, documented shape to code against.
+
+`estimated_probability` is calculated and exposed for future
+learning/analysis use, but no Phase 2 baseline scheduler uses it as a
+decision criterion.
+
+### `SimpleBeliefState`
+
+Constructed with an explicit `num_bands` (the receiver's own scan range —
+known configuration, not ground truth). Only ever driven by `Observation`
+objects passed to `update()`; never imports anything from `environment/`.
+`reset()` returns every band to "never observed."
+
+### Baseline schedulers
+
+Three `Scheduler` implementations, one per file under
+`scheduler/`, each also taking an explicit `num_bands`:
+
+- **`RoundRobinScheduler`** — cycles `0, 1, ..., num_bands-1, 0, ...`.
+  Ignores `state` entirely. No randomness.
+- **`RandomScheduler`** — uniform random band from an owned
+  `random.Random`, seeded at construction (the `Scheduler.reset()`
+  interface takes no arguments, so — same pattern as `SimpleReceiver` in
+  Phase 1 — the seed lives at construction and `reset()` re-seeds from
+  it). Ignores `state` entirely.
+- **`GreedyRecentHitScheduler`** — stateless between calls; reads
+  `state.get_features()` fresh each time. Decision rule: (1) among bands
+  with `last_detected is True`, pick the largest `last_observed_time`,
+  ties broken by lowest `band_id`; (2) if no band has ever hit, pick the
+  fewest `observation_count`, ties broken by lowest `band_id`. No
+  exploration probability, no decay, no use of `estimated_probability`.
+  Does not import `state/`'s concrete types (see the module's docstring
+  for the duck-typing rationale) — it depends only on `interfaces/`.
+
+All three baseline schedulers ignore the `reward` argument to `update()`
+entirely — reward-driven behavior is reserved for the Phase 4 learning
+scheduler; these exist specifically to be fair, non-learning comparison
+points (see "Comparing baselines with an ML scheduler" below).
+
+### `num_bands` consistency (explicit tradeoff, not automated)
+
+`SimpleRFEnvironment`, `SimpleBeliefState`, and each scheduler all take
+`num_bands` as an independent constructor argument — no shared config
+object ties them together yet (owner's explicit decision). Whoever wires
+a run together (currently: test code; later: the Phase 3 `Evaluator`) is
+responsible for passing the same value everywhere. Nothing enforces this
+automatically today.
+
+### Ground-truth isolation, extended
+
+`tests/test_phase2_ground_truth_isolation.py` extends the Phase 1 spy
+pattern across the full `environment → receiver → state → scheduler`
+loop for all three baseline schedulers, asserting `get_ground_truth()` is
+never called anywhere in the loop.
+
+### Comparing baselines with an ML scheduler later
+
+The plan (to be implemented in Phase 3/4, not now): the Phase 3
+`Evaluator` will run the *same* `RFEnvironment` scenario and seed, and
+the *same* `Receiver` seed, against each candidate `Scheduler` in turn —
+the three baselines here, and later the learning-based scheduler. Holding
+the emitter/noise randomness identical across runs isolates the outcome
+difference to the scheduling policy itself, which is what makes the
+baselines a *fair* comparison point rather than an arbitrary one.
+
 ## What is deliberately still NOT decided
 
-- Whether `State.get_features()` returns a dict, a fixed-size vector, or a
-  small custom type — deferred until a scheduler actually needs one
-  (Phase 2).
 - The learning algorithm for the eventual learning-based `Scheduler` —
   intentionally unspecified.
 - Config file format (dataclass-only for now; whether it's loaded from
   YAML/JSON later is an open decision).
 - Real propagation/antenna/multipath modeling — explicitly out of scope,
   not just deferred; see Phase 1 Limitations in the implementation summary.
+- A shared config object tying `num_bands` together across environment,
+  state, and scheduler — currently independent constructor arguments by
+  explicit Phase 2 decision; may be revisited when the Evaluator (Phase 3)
+  needs to wire all of them together itself.
