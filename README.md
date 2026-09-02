@@ -3,7 +3,7 @@ ML-based Smart Scan Strategy for Electronic Warfare PS 26055 – SAH/SIH 2026
 
 ## Project status
 
-The project has completed Phase 1.
+The project has completed Phase 2.
 
 ### Phase 0 — Foundation
 Completed:
@@ -22,10 +22,21 @@ Completed:
 - Ground-truth isolation
 - Phase 1 tests
 
+### Phase 2 — State/Belief & Baseline Schedulers
+Completed:
+- Band belief representation
+- Observation history
+- Estimated transmission probability
+- Round-robin scheduler
+- Random scheduler
+- Greedy recent-hit scheduler
+- Ground-truth isolation tests
+- Phase 2 tests
+
 ### Current phase
 
-Phase 1 complete. Phase 2 will implement the state/belief representation
-and baseline scanning schedulers.
+Phase 2 complete. Phase 3 will implement the evaluation framework
+and performance metrics for comparing scanning strategies.
 ### Running tests
 
 ```bash
