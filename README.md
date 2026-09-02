@@ -3,15 +3,29 @@ ML-based Smart Scan Strategy for Electronic Warfare PS 26055 – SAH/SIH 2026
 
 ## Project status
 
-This repo is currently in **Phase 0 (foundation)**: interfaces, contracts,
-and folder structure only — no RF simulation, ML, RL, or dashboard yet.
+The project has completed Phase 1.
 
-- [`PROJECT_CONTRACT.md`](PROJECT_CONTRACT.md) — scope, rules, and the
-  phase plan.
-- [`ARCHITECTURE.md`](ARCHITECTURE.md) — module interfaces and data flow.
-- [`CLAUDE.md`](CLAUDE.md) — working rules for anyone (human or AI)
-  extending this codebase.
+### Phase 0 — Foundation
+Completed:
+- Project architecture
+- Module contracts
+- Interfaces
+- Initial test structure
 
+### Phase 1 — RF Environment & Receiver
+Completed:
+- Continuous-wave emitter
+- Pulsed emitter
+- Frequency-hopping emitter
+- Simulated RF environment
+- Receiver with noise and detection threshold
+- Ground-truth isolation
+- Phase 1 tests
+
+### Current phase
+
+Phase 1 complete. Phase 2 will implement the state/belief representation
+and baseline scanning schedulers.
 ### Running tests
 
 ```bash
