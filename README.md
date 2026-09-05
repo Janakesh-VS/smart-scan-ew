@@ -57,10 +57,9 @@ Completed:
   and an explicit `observed_b` flag, so long, unrevisited bands can
   never trigger a division-by-zero or NaN/inf score.
 - Hyperparameter grid (`gamma in {0.90, 0.95, 0.99, 1.00}`,
-  `c in {0.5, 1.0, 2.0}`) selected on dedicated selection-only seeds via
-  a two-stage rule (max mean active-emitter interception rate, near-tie
-  broken by lowest mean intercept time — see `ARCHITECTURE.md`), then
-  frozen and evaluated on disjoint held-out seeds
+  `c in {0.5, 1.0, 2.0}`) selected on dedicated selection-only seeds
+  by maximizing mean active-emitter interception rate, then frozen
+  and evaluated on disjoint held-out seeds.
   (`examples/phase4_experiment.py`).
 - Four-way comparison against the three Phase 2 baselines using the
   existing Phase 3 `run_repeated_trials()` — no evaluator code changed.
