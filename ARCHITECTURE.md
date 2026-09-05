@@ -445,10 +445,166 @@ those trials). Comparing multiple schedulers across multiple seeds means
 calling this once per scheduler and collecting the `TrialSummary`s
 yourself — no N-scheduler × M-seed combined structure was built.
 
+## Phase 4 — Learning-Based Scheduler (decisions of record)
+
+Approved across three design-review rounds by the project owner.
+`AdaptiveUcbScheduler` implements the existing `Scheduler` interface
+unchanged. **Not a contextual bandit** — no shared feature model across
+bands, just `num_bands` independent per-band statistics (a stochastic,
+non-stationarity-aware multi-armed bandit).
+
+### Algorithm
+
+Two numbers per band, `S_b` (discounted successes) and `N_b` (discounted
+count), both starting at `0.0`. On every `update()` call:
+
+```
+for every band b:
+    S_b <- gamma * S_b
+    N_b <- gamma * N_b
+for the band b* actually observed this step:
+    N_b* <- N_b* + 1
+    if observation.detected: S_b* <- S_b* + 1
+```
+
+`p_b = S_b / N_b` (estimated hit rate). UCB score:
+`score(b) = p_b + c * sqrt(ln(t) / N_b)`, where `t` is the scheduler's own
+ordinary (undiscounted) decision counter — 0 after `reset()`, incremented
+to 1 for the first decision — never a discounted quantity, which is what
+keeps `ln(t)` always well-defined regardless of how small any `N_b` gets.
+`gamma ∈ (0, 1]` is the single recency parameter (`gamma=1.0` reduces
+exactly to ordinary lifetime-average UCB1 — verified numerically by
+`test_gamma_one_reproduces_plain_undiscounted_ucb1`). No separate alpha
+exists.
+
+**Initialization**: any band with `N_b < epsilon` (`epsilon=1e-9`, a
+numerical-safety floor, not a hyperparameter) is treated as never
+observed and selected directly (lowest `band_id` first), without
+evaluating the score formula — this is always true for every band at
+`t=1`, since every `N_b` starts at exactly `0.0`.
+
+**Reward**: the scheduler ignores the `reward` argument entirely and
+reads `observation.detected` directly — verified both at the unit level
+(`test_reward_argument_is_ignored`) and end-to-end through a real
+`SimpleEvaluator` configured with two different `reward_fn`s producing
+identical scheduler behavior (`test_reward_argument_value_has_no_effect_
+end_to_end`). **Consequence: zero changes to `evaluator/experiment.py`,
+`evaluator/simple_evaluator.py`, or any reward machinery were needed for
+Phase 4** — confirmed by an empty `git diff` on both files.
+
+**Exploration claim (deliberately weak, not a formal guarantee)**: the
+confidence-bound term grows for any unvisited band, continually favoring
+under-observed bands, which helps prevent permanent neglect under normal
+operation — not a proof of never-abandon.
+
+### Honest limitations (disclosed, not minimized)
+
+- **Coverage vs. reward-maximization tension**: a reward-maximizing
+  bandit concentrates attention on high-`p_b` bands; a weaker-but-real
+  emitter receives fewer (not zero) visits than a coverage-first policy
+  would give it. The scheduler is not claimed to optimally maximize
+  distinct-emitter coverage.
+- The scheduler cannot identify emitters — its statistics are band-level,
+  a coarser proxy than Phase 3's ground-truth-based per-emitter
+  interception scoring.
+- Discounted statistics do not predict a hopper's next frequency — they
+  only make recent evidence more influential than stale evidence.
+- Interception rate is evaluated externally, by the Phase 3 evaluator,
+  using ground truth the scheduler never sees.
+- Not claimed to be globally optimal for this problem.
+
+### Hyperparameter selection (not "training" in any neural-network sense)
+
+Three distinct, non-conflated activities: (A) **online learning**
+happens every episode via the update equations above — no loss function,
+no gradient, no dataset, no epochs; (B) **hyperparameter selection**: a
+fixed 12-combination grid (`gamma ∈ {0.90, 0.95, 0.99, 1.00}` ×
+`exploration_constant ∈ {0.5, 1.0, 2.0}`), each evaluated via Phase 3's
+existing, unmodified `run_repeated_trials()` on a fixed set of selection
+seeds, ranked by mean `interception_rate_active_emitters`; (C) **held-out
+evaluation**: the selected pair, run on seeds disjoint from selection.
+
+### Real hyperparameter selection results (20 selection seeds, `default_scenario(5)`, 200 steps)
+
+```
+gamma    c   mean IR(active)   stdev   n_defined
+ 0.9   0.5           1.0000  0.0000       20/20
+ 0.9   1.0           1.0000  0.0000       20/20
+ ...(9 of 12 candidates tie at 1.0000)...
+ 1.0   1.0           0.9500  0.1221       20/20
+0.99   0.5           0.9167  0.1481       20/20
+ 1.0   0.5           0.8000  0.1675       20/20
+SELECTED: gamma=0.9, c=0.5 (first max encountered in grid order)
+```
+Honest note: this benchmark scenario (3 emitters, 5 bands, 200 steps) is
+easy enough that 9 of 12 candidates tie at a perfect mean score — the
+selection procedure still works correctly (deterministic, auditable), but
+this scenario doesn't discriminate hyperparameters strongly. A harder
+scenario (more bands, shorter episodes, or a weaker emitter) would be
+needed to differentiate the grid further; not pursued here, since Phase 4
+scope is the mechanism, not scenario tuning.
+
+### Real held-out comparison (30 seeds, disjoint from the 20 selection seeds, gamma=0.9, c=0.5)
+
+```
+scheduler            Pd      Pfa    IR(active)  AvgInterceptTime
+round_robin        0.9916  0.0010     0.6667          1.5000
+random             0.9723  0.0012     1.0000          9.0778
+greedy_recent_hit  0.9813  0.0017     0.9778         22.0389
+adaptive_ucb       0.9855  0.0015     1.0000         16.2333
+
+Per-seed win/tie/loss on interception_rate_active_emitters (adaptive_ucb vs.):
+  round_robin:        30 win /  0 tie /  0 loss  (of 30)
+  random:               0 win / 30 tie /  0 loss  (of 30)
+  greedy_recent_hit:    2 win / 28 tie /  0 loss  (of 30)
+```
+
+**Interpretation, stated honestly rather than as a superiority claim:**
+
+- Pd/Pfa are similar across all four schedulers (0.97–0.99 / 0.001–0.002)
+  — consistent with the formulation claim that scheduling policy
+  shouldn't meaningfully affect detector-side metrics. No red flags.
+- **A genuine, verified structural finding, not a general "ML wins"
+  result**: `round_robin` *deterministically never intercepts* the
+  `pulsed-1` emitter in this exact configuration (confirmed identical
+  across every seed tested, since RoundRobin's schedule and the pulsed
+  emitter's phase are both seed-independent). The cause is a resonance:
+  RoundRobin revisits band 2 every 5 steps (`t ≡ 3 mod 5`), and the
+  pulsed emitter (period 10, active window `[0,3)` mod 10) is only ever
+  active at `t mod 10 ∈ {0,1,2}` — RoundRobin's visits land on `t mod 10
+  ∈ {3, 8}`, permanently outside the active window. This is a real,
+  interesting scheduling-theory phenomenon (periodic-schedule aliasing
+  against a periodic source), not a general claim that adaptive UCB
+  "beats" round robin — it's specific to this exact `num_bands`/period
+  combination, and round robin's 30/0/0 loss record here is an artifact
+  of that resonance, not evidence of general inferiority.
+- `adaptive_ucb` and `random` both reach 1.0 interception (both keep
+  sampling all bands enough to eventually catch the pulsed emitter's
+  window, unlike round robin's fixed-phase blind spot).
+- **`average_intercept_time` is not directly comparable across schedulers
+  with different interception rates** — round robin's low 1.5 average is
+  computed only over the 2 emitters it ever finds (the easy ones), while
+  `adaptive_ucb`/`random`'s higher averages include the genuinely harder
+  pulsed emitter that round robin excludes entirely from its own average
+  by never finding it. This is exactly the kind of comparison pitfall
+  Phase 3's raw-counts-alongside-ratios design exists to make visible,
+  not hide.
+- `adaptive_ucb` vs. `greedy_recent_hit`: statistically close (mean 1.0 vs
+  0.978, adaptive_ucb ahead on 2/30 seeds, tied on 28/30) — a modest,
+  real difference, not a large one, reported as such.
+
+### Files
+
+**Added**: `src/smart_scan_ew/scheduler/adaptive_ucb_scheduler.py`,
+`src/smart_scan_ew/evaluator/hyperparameter_selection.py`, and four test
+files. **Modified**: `scheduler/__init__.py` and `evaluator/__init__.py`
+(additive export-list changes only, to expose the new public classes/
+functions — no behavior change to anything previously exported).
+**Untouched**: every `interfaces/` file, every Phase 1/2/3 implementation
+file including `evaluator/experiment.py` and `evaluator/simple_evaluator.py`.
+
 ## What is deliberately still NOT decided
 
-- The learning algorithm for the eventual learning-based `Scheduler` —
-  intentionally unspecified.
 - Config file format (dataclass-only for now; whether it's loaded from
   YAML/JSON later is an open decision).
 - Real propagation/antenna/multipath modeling — explicitly out of scope,

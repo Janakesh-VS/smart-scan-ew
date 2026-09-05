@@ -74,8 +74,17 @@ These are the rules the project owner specified. They apply to every phase:
   error, and average reward/cost from real recorded runs — raw TP/FP/FN/TN
   counts are kept alongside every derived ratio. See `ARCHITECTURE.md`'s
   Phase 3 section for details.
-- **Phase 4 — Learning-based scheduler.** Introduced only once Phase 1–3 are
-  solid and only with explicit sign-off, per rule 9.
+- **Phase 4 — Learning-based scheduler (complete).**
+  `AdaptiveUcbScheduler`: an Adaptive Discounted-UCB multi-armed bandit
+  (not a contextual bandit — no shared feature model across bands),
+  maintaining private per-band discounted statistics updated only from
+  `Observation.detected`; the `reward` argument is accepted but ignored.
+  A small, fixed hyperparameter grid search (`gamma` × `exploration_
+  constant`, 12 combinations) selects hyperparameters on disjoint
+  selection seeds before held-out evaluation. No neural networks, RL,
+  DQN, policy gradients, or reward shaping were introduced. See
+  `ARCHITECTURE.md`'s Phase 4 section for the full specification and real
+  held-out comparison results against the three Phase 2 baselines.
 - **Phase 5 — Dashboard.** Visualizes evaluator output; no direct access to
   environment or scheduler internals.
 
@@ -111,7 +120,17 @@ the next.
   and are recorded in `ARCHITECTURE.md`'s "Phase 3" section. No Phase
   0/1/2 interface was modified — confirmed by an empty `git diff` against
   every existing interface/implementation file.
-- Remaining open items (config file format, the eventual learning
-  algorithm) are listed in `ARCHITECTURE.md` under "What is deliberately
-  still NOT decided" and will be raised again when the relevant phase
-  begins.
+- **Phase 4** decisions (Adaptive Discounted-UCB algorithm, exact
+  discounted-statistic/UCB-score equations, ignoring the evaluator's
+  `reward` argument in favor of reading `observation.detected` directly,
+  the hyperparameter grid, and the honest coverage/reward-maximization
+  limitation) were explicitly approved by the owner across three design
+  review rounds and are recorded in `ARCHITECTURE.md`'s "Phase 4"
+  section. No Phase 0-3 interface, and no other existing implementation
+  file, was modified — confirmed by an empty `git diff` against every
+  file under `interfaces/`, `environment/`, `receiver/`, `state/`, the
+  Phase 2 scheduler files, `evaluator/experiment.py`, and
+  `evaluator/simple_evaluator.py`.
+- Remaining open items (config file format) are listed in
+  `ARCHITECTURE.md` under "What is deliberately still NOT decided" and
+  will be raised again when the relevant phase begins.

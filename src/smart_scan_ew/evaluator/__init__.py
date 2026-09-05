@@ -16,6 +16,13 @@ from smart_scan_ew.evaluator.comparison import (
     run_repeated_trials,
 )
 from smart_scan_ew.evaluator.experiment import ExperimentConfig, run_experiment_for_scheduler
+from smart_scan_ew.evaluator.hyperparameter_selection import (
+    DEFAULT_EXPLORATION_CONSTANT_GRID,
+    DEFAULT_GAMMA_GRID,
+    HyperparameterCandidate,
+    HyperparameterSelectionResult,
+    select_ucb_hyperparameters,
+)
 from smart_scan_ew.evaluator.records import (
     EmitterInterceptionRecord,
     ExperimentResult,
@@ -38,4 +45,9 @@ __all__ = [
     "MetricStats",
     "TrialSummary",
     "run_repeated_trials",
+    "HyperparameterCandidate",
+    "HyperparameterSelectionResult",
+    "select_ucb_hyperparameters",
+    "DEFAULT_GAMMA_GRID",
+    "DEFAULT_EXPLORATION_CONSTANT_GRID",
 ]

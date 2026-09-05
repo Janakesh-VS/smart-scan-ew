@@ -14,16 +14,18 @@ it has observed so far — never on the true RF environment state.
 
 ## Current Phase
 
-**Phase 3 — Evaluation framework (complete).** A real `SimpleEvaluator`
-(implements the Phase 0 `Evaluator` interface exactly, no changes), plus
-additive orchestration (`ExperimentConfig`, `run_experiment_for_scheduler`,
-`compare_baselines`, `run_repeated_trials`) now exist under
-`src/smart_scan_ew/evaluator/`. Six metrics (Pd, Pfa, interception rate,
-average intercept time, intercept time error, average reward/cost) are
-computed from real recorded runs, with raw TP/FP/FN/TN counts kept
-alongside every derived ratio for auditability. See `ARCHITECTURE.md`'s
-"Phase 3" section for the concrete decisions of record. No ML/RL or
-dashboard exists yet — see `PROJECT_CONTRACT.md` for the phase plan.
+**Phase 4 — Learning-based scheduler (complete).** `AdaptiveUcbScheduler`
+(Adaptive Discounted-UCB Multi-Armed Bandit) now exists under
+`src/smart_scan_ew/scheduler/`, implementing the unchanged `Scheduler`
+interface. It maintains private, per-band discounted statistics
+(`S_b`, `N_b`) updated only from `Observation.detected` — the `reward`
+argument is accepted (interface requirement) but deliberately ignored.
+`src/smart_scan_ew/evaluator/hyperparameter_selection.py` provides a
+small, fixed grid search (not a training loop) over `(gamma,
+exploration_constant)`. See `ARCHITECTURE.md`'s "Phase 4" section for the
+full mathematical specification, decisions of record, and real held-out
+comparison results. No `interfaces/` file, and no other Phase 0-3
+implementation file, was modified. No dashboard exists yet.
 
 Do not jump ahead of the current phase without the project owner's sign-off.
 
@@ -77,7 +79,9 @@ src/smart_scan_ew/
     receiver/            # Phase 1: SimpleReceiver
     state/                # Phase 2: SimpleBeliefState, BeliefSnapshot, BandBeliefView
     scheduler/            # Phase 2: RoundRobinScheduler, RandomScheduler, GreedyRecentHitScheduler
+                          # Phase 4: AdaptiveUcbScheduler
     evaluator/            # Phase 3: SimpleEvaluator, ExperimentConfig, compare_baselines, run_repeated_trials
+                          # Phase 4: hyperparameter_selection.py (AdaptiveUcbScheduler grid search)
 tests/                 # one test module per interface/contract for now
 ```
 

@@ -3,7 +3,7 @@ ML-based Smart Scan Strategy for Electronic Warfare PS 26055 – SAH/SIH 2026
 
 ## Project status
 
-The project has completed Phase 3.
+The project has completed Phase 4.
 
 ### Phase 0 — Foundation
 Completed:
@@ -45,10 +45,26 @@ Completed:
 - Ground-truth isolation tests at the evaluator boundary
 - Phase 3 tests
 
+### Phase 4 — Learning-Based Scheduler
+Completed:
+- AdaptiveUcbScheduler (Adaptive Discounted-UCB multi-armed bandit,
+  not a contextual bandit — no shared feature model across bands)
+- Discounted per-band statistics (S_b, N_b), UCB score with a scheduler-
+  owned ordinary decision counter t
+- reward argument accepted (interface requirement) but ignored;
+  observation.detected used directly
+- Hyperparameter grid search (gamma x exploration_constant), reusing
+  run_repeated_trials unmodified — not a neural-network training loop
+- Real held-out comparison against Round Robin, Random, and Greedy
+  Recent Hit, with honest, non-cherry-picked interpretation
+- No changes to any Phase 0-3 interface or to the Phase 3 evaluator/
+  reward framework
+- Full Phase 4 test suite, including ground-truth isolation
+
 ### Current phase
 
-Phase 3 complete. Phase 4 will introduce a learning-based scheduler,
-evaluated against the Phase 2 baselines using the Phase 3 framework.
+Phase 4 complete. See ARCHITECTURE.md's "Phase 4" section for the full
+specification, known limitations, and real held-out experiment results.
 
 ### Running tests
 
