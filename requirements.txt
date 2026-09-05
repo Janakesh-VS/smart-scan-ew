@@ -1,9 +1,10 @@
-# Phase 0 (foundation) dependencies only.
+# Phase 0 (foundation) + Phase 4/5 dependencies.
 # Add a new dependency here only when a concrete module actually needs it,
 # and note why in a comment — see CLAUDE.md rule 13.
 
 pytest>=7.0
 
-# Anticipated, NOT yet added (uncomment when the module that needs it lands):
-# numpy            # numeric arrays for RF signal/emitter modeling (Phase 1)
-# matplotlib       # plotting for evaluation/dashboard (Phase 5)
+# Phase 5 dashboard (src/smart_scan_ew/dashboard/):
+streamlit>=1.30   # UI framework; streamlit.testing.v1.AppTest used for headless tests
+pandas            # tabular display (belief state / UCB diagnostics / comparison tables)
+matplotlib        # time-frequency map and comparison bar chart

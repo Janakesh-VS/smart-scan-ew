@@ -28,7 +28,7 @@ be compared against each other using a common evaluation harness.
 | Classical scanning schedulers | Deterministic/heuristic strategies (e.g. round-robin, priority-based) implementing the `Scheduler` interface. |
 | Learning-based scheduler | A later `Scheduler` implementation that learns from observations/rewards. |
 | Evaluation and metrics | Runs experiments, is the only component allowed to read ground truth, and scores schedulers. |
-| Dashboard | Visualizes runs/metrics. Consumes evaluator output only. |
+| Dashboard | Visualizes runs/metrics AND drives a live step-by-step simulation directly (environment/receiver/state/scheduler), under the same ground-truth isolation rule as everything else — never just a passive consumer of evaluator output. |
 
 ## Non-Negotiable Architecture Rules
 
@@ -74,19 +74,21 @@ These are the rules the project owner specified. They apply to every phase:
   error, and average reward/cost from real recorded runs — raw TP/FP/FN/TN
   counts are kept alongside every derived ratio. See `ARCHITECTURE.md`'s
   Phase 3 section for details.
-- **Phase 4 — Learning-based scheduler (complete).**
-  `AdaptiveUcbScheduler`: an Adaptive Discounted-UCB multi-armed bandit
-  (not a contextual bandit — no shared feature model across bands),
-  maintaining private per-band discounted statistics updated only from
-  `Observation.detected`; the `reward` argument is accepted but ignored.
-  A small, fixed hyperparameter grid search (`gamma` × `exploration_
-  constant`, 12 combinations) selects hyperparameters on disjoint
-  selection seeds before held-out evaluation. No neural networks, RL,
-  DQN, policy gradients, or reward shaping were introduced. See
-  `ARCHITECTURE.md`'s Phase 4 section for the full specification and real
-  held-out comparison results against the three Phase 2 baselines.
-- **Phase 5 — Dashboard.** Visualizes evaluator output; no direct access to
-  environment or scheduler internals.
+- **Phase 4 — Learning-based scheduler (complete).** `AdaptiveUcbScheduler`
+  — a non-stationary/recency-aware, discounted-UCB multi-armed bandit
+  (explicitly not a contextual bandit; explicitly not neural/deep-RL, per
+  rule 9). Maintains its own internal per-band statistics, never modifies
+  `SimpleBeliefState`. Hyperparameters selected on dedicated seeds and
+  evaluated on disjoint held-out seeds via `examples/phase4_experiment.py`,
+  reusing the Phase 3 evaluator package unchanged. See `ARCHITECTURE.md`'s
+  "Phase 4" section for details.
+- **Phase 5 — Dashboard (complete).** A Streamlit dashboard
+  (`src/smart_scan_ew/dashboard/`) built entirely on the existing Phase
+  1-4 components and Phase 3 evaluator APIs — no evaluator/scheduler
+  logic reimplemented, no new emitter/ML model introduced. The only
+  Phase 4 change is additive and non-algorithmic (`AdaptiveUcbScheduler`
+  gained read-only `get_diagnostics()`/`decision_count` accessors). See
+  `ARCHITECTURE.md`'s "Phase 5" section for details.
 
 Each phase should end with something runnable and tested before moving to
 the next.
@@ -120,17 +122,29 @@ the next.
   and are recorded in `ARCHITECTURE.md`'s "Phase 3" section. No Phase
   0/1/2 interface was modified — confirmed by an empty `git diff` against
   every existing interface/implementation file.
-- **Phase 4** decisions (Adaptive Discounted-UCB algorithm, exact
-  discounted-statistic/UCB-score equations, ignoring the evaluator's
-  `reward` argument in favor of reading `observation.detected` directly,
-  the hyperparameter grid, and the honest coverage/reward-maximization
-  limitation) were explicitly approved by the owner across three design
-  review rounds and are recorded in `ARCHITECTURE.md`'s "Phase 4"
-  section. No Phase 0-3 interface, and no other existing implementation
-  file, was modified — confirmed by an empty `git diff` against every
-  file under `interfaces/`, `environment/`, `receiver/`, `state/`, the
-  Phase 2 scheduler files, `evaluator/experiment.py`, and
-  `evaluator/simple_evaluator.py`.
-- Remaining open items (config file format) are listed in
+- **Phase 4** decisions (the discounted-UCB algorithm and its exact
+  equations, the `gamma`/`c` hyperparameter grid, the two-stage
+  near-tie selection rule, `EPSILON`/`observed_b` numerical-safety
+  strategy, keeping learning state inside the scheduler rather than in
+  `SimpleBeliefState`) were explicitly approved by the owner and are
+  recorded in `ARCHITECTURE.md`'s "Phase 4" section. No Phase 0/1/2/3
+  interface or implementation file was modified except
+  `scheduler/__init__.py`'s export list — confirmed by `git diff`
+  against every other existing interface/implementation file.
+- **Phase 5** decisions (the additive, read-only
+  `BandUcbDiagnostics`/`get_diagnostics()`/`decision_count` accessors on
+  `AdaptiveUcbScheduler` — Decision 1; the dashboard controller using
+  `run_repeated_trials`/`ExperimentConfig`/`derive_seeds` directly
+  rather than importing `examples/phase4_experiment.py` — Decision 2)
+  were explicitly approved by the owner and are recorded in
+  `ARCHITECTURE.md`'s "Phase 5" section. No Phase 0/1/2/3 interface or
+  implementation file was modified; the only change to Phase 4 code is
+  the additive accessor refactor in `adaptive_ucb.py` (verified
+  behavior-preserving: all 138 pre-Phase-5 tests still passed
+  immediately after that refactor, before any dashboard code was
+  written) — confirmed by `git diff` against every other existing
+  interface/implementation file.
+- Remaining open items (config file format, whether a shared config
+  object should tie `num_bands` together) are listed in
   `ARCHITECTURE.md` under "What is deliberately still NOT decided" and
   will be raised again when the relevant phase begins.

@@ -14,25 +14,36 @@ it has observed so far — never on the true RF environment state.
 
 ## Current Phase
 
-**Phase 4 — Learning-based scheduler (complete).** `AdaptiveUcbScheduler`
-(Adaptive Discounted-UCB Multi-Armed Bandit) now exists under
-`src/smart_scan_ew/scheduler/`, implementing the unchanged `Scheduler`
-interface. It maintains private, per-band discounted statistics
-(`S_b`, `N_b`) updated only from `Observation.detected` — the `reward`
-argument is accepted (interface requirement) but deliberately ignored.
-`src/smart_scan_ew/evaluator/hyperparameter_selection.py` provides a
-small, fixed grid search (not a training loop) over `(gamma,
-exploration_constant)`. See `ARCHITECTURE.md`'s "Phase 4" section for the
-full mathematical specification, decisions of record, and real held-out
-comparison results. No `interfaces/` file, and no other Phase 0-3
-implementation file, was modified. No dashboard exists yet.
+**Phase 5 — Dashboard (complete).** `src/smart_scan_ew/dashboard/`
+(`controller.py` + `app.py`, Streamlit) is a pure consumer of the
+existing Phase 1-4 components and Phase 3 evaluator APIs — no
+simulation, scheduler, or evaluator logic was reimplemented inside it.
+`controller.py` has zero `streamlit` import (all non-UI logic, fully
+unit-testable); `app.py` is the UI only. The one change to Phase 4 code
+is additive and non-algorithmic: `AdaptiveUcbScheduler` gained
+`get_diagnostics()` (returns `BandUcbDiagnostics`, one per band) and a
+read-only `decision_count` property, both computed via a shared
+`_score_components()` helper `select_band()` itself now also uses — the
+UCB equations, update order, initialization, exploration, tie-breaking,
+and reset semantics are byte-for-byte unchanged (verified: all 138
+pre-existing tests still pass after the refactor, plus new tests
+checking the accessors are read-only and match internal state exactly).
+The dashboard does not import `examples/phase4_experiment.py`; its
+four-way comparison is built directly on `run_repeated_trials`,
+`ExperimentConfig`, and `derive_seeds`. Ground-truth isolation is
+re-verified for the dashboard's own step loop (structural + runtime
+spy). See `ARCHITECTURE.md`'s "Phase 4" and "Phase 5" sections for full
+details, including Phase 5's documented Streamlit session-state and
+auto-run limitations.
+
+There is no Phase 6 yet.
 
 Do not jump ahead of the current phase without the project owner's sign-off.
 
 ## Hard Rules (do not violate these while extending the project)
 
 1. **Module independence.** `environment`, `receiver`, `scheduler`, `state`,
-   `evaluator`, and (later) `dashboard` are separate packages/modules. A
+   `evaluator`, and `dashboard` are separate packages/modules. A
    module may depend on interfaces, not on another module's internals.
 2. **Communicate only through the defined interfaces**
    (see `ARCHITECTURE.md`). If a new interaction is needed, extend an
@@ -79,15 +90,26 @@ src/smart_scan_ew/
     receiver/            # Phase 1: SimpleReceiver
     state/                # Phase 2: SimpleBeliefState, BeliefSnapshot, BandBeliefView
     scheduler/            # Phase 2: RoundRobinScheduler, RandomScheduler, GreedyRecentHitScheduler
-                          # Phase 4: AdaptiveUcbScheduler
+                          # Phase 4: AdaptiveUcbScheduler (adaptive_ucb.py)
     evaluator/            # Phase 3: SimpleEvaluator, ExperimentConfig, compare_baselines, run_repeated_trials
-                          # Phase 4: hyperparameter_selection.py (AdaptiveUcbScheduler grid search)
+    dashboard/            # Phase 5: controller.py (no UI import) + app.py (Streamlit)
+examples/
+    phase4_experiment.py  # Phase 4: hyperparameter selection + held-out evaluation + 4-way comparison
 tests/                 # one test module per interface/contract for now
 ```
 
-Future concrete modules (learning-based scheduler, dashboard) will each
-get their own subpackage under `src/smart_scan_ew/`, implementing the
-interfaces defined in `src/smart_scan_ew/interfaces/`.
+Streamlit constraints (Phase 5, see `dashboard/app.py`'s module
+docstring for the full explanation): the `DashboardController` instance
+lives in `st.session_state`, never a module-level global; the simulation
+is reset only when the resolved configuration actually changes or
+"Reset" is pressed, never on an unrelated rerun; "Start"/"Pause" drive a
+bounded auto-advance-then-`st.rerun()` loop, which is best-effort, not a
+guaranteed-smooth animation — "Step Once" is the reliable alternative
+for a live demo.
+
+No further concrete modules are planned. Any new one still gets its own
+subpackage under `src/smart_scan_ew/`, implementing the interfaces
+defined in `src/smart_scan_ew/interfaces/`.
 
 ## Before adding a new module
 

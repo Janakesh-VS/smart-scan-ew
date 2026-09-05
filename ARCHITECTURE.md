@@ -445,163 +445,407 @@ those trials). Comparing multiple schedulers across multiple seeds means
 calling this once per scheduler and collecting the `TrialSummary`s
 yourself — no N-scheduler × M-seed combined structure was built.
 
-## Phase 4 — Learning-Based Scheduler (decisions of record)
+## Phase 4 — Adaptive Discounted-UCB Scheduler (decisions of record)
 
-Approved across three design-review rounds by the project owner.
-`AdaptiveUcbScheduler` implements the existing `Scheduler` interface
-unchanged. **Not a contextual bandit** — no shared feature model across
-bands, just `num_bands` independent per-band statistics (a stochastic,
-non-stationarity-aware multi-armed bandit).
+Approved by the project owner before implementation. Applies to
+`src/smart_scan_ew/scheduler/adaptive_ucb.py` and
+`examples/phase4_experiment.py`. No `interfaces/`, `environment/`,
+`receiver/`, `state/`, `evaluator/`, or existing `scheduler/` baseline
+file was modified — only `scheduler/__init__.py`'s export list changed
+(confirmed by `git diff`).
 
-### Algorithm
+### Terminology
 
-Two numbers per band, `S_b` (discounted successes) and `N_b` (discounted
-count), both starting at `0.0`. On every `update()` call:
+Explicitly **not** a contextual bandit: `AdaptiveUcbScheduler` maintains
+completely independent statistics per band, with no shared model and no
+feature vector. Correctly described as a non-stationary/recency-aware
+multi-armed bandit — specifically a discounted-UCB variant.
 
-```
-for every band b:
-    S_b <- gamma * S_b
-    N_b <- gamma * N_b
-for the band b* actually observed this step:
-    N_b* <- N_b* + 1
-    if observation.detected: S_b* <- S_b* + 1
-```
+### Where the learning state lives
 
-`p_b = S_b / N_b` (estimated hit rate). UCB score:
-`score(b) = p_b + c * sqrt(ln(t) / N_b)`, where `t` is the scheduler's own
-ordinary (undiscounted) decision counter — 0 after `reset()`, incremented
-to 1 for the first decision — never a discounted quantity, which is what
-keeps `ln(t)` always well-defined regardless of how small any `N_b` gets.
-`gamma ∈ (0, 1]` is the single recency parameter (`gamma=1.0` reduces
-exactly to ordinary lifetime-average UCB1 — verified numerically by
-`test_gamma_one_reproduces_plain_undiscounted_ucb1`). No separate alpha
-exists.
+`SimpleBeliefState`/`BeliefSnapshot` are unchanged and are not this
+scheduler's data source. `AdaptiveUcbScheduler` maintains its own private
+per-band statistics, exactly like `RandomScheduler` already owns its own
+RNG state. `select_band(state)` accepts `state` only because the
+`Scheduler` interface requires it; its contents are never read — the
+same choice `RoundRobinScheduler`/`RandomScheduler` already make.
 
-**Initialization**: any band with `N_b < epsilon` (`epsilon=1e-9`, a
-numerical-safety floor, not a hyperparameter) is treated as never
-observed and selected directly (lowest `band_id` first), without
-evaluating the score formula — this is always true for every band at
-`t=1`, since every `N_b` starts at exactly `0.0`.
+### State and update rule
 
-**Reward**: the scheduler ignores the `reward` argument entirely and
-reads `observation.detected` directly — verified both at the unit level
-(`test_reward_argument_is_ignored`) and end-to-end through a real
-`SimpleEvaluator` configured with two different `reward_fn`s producing
-identical scheduler behavior (`test_reward_argument_value_has_no_effect_
-end_to_end`). **Consequence: zero changes to `evaluator/experiment.py`,
-`evaluator/simple_evaluator.py`, or any reward machinery were needed for
-Phase 4** — confirmed by an empty `git diff` on both files.
+Per band `b`: `S_b` (discounted successes), `N_b` (discounted
+observation count), `observed_b` (bool, whether `b` has EVER been
+observed — never derived from `N_b`, see "Numerical safety" below). Plus
+one scheduler-wide `t`: the 1-indexed, episode-local decision count.
 
-**Exploration claim (deliberately weak, not a formal guarantee)**: the
-confidence-bound term grows for any unvisited band, continually favoring
-under-observed bands, which helps prevent permanent neglect under normal
-operation — not a proof of never-abandon.
-
-### Honest limitations (disclosed, not minimized)
-
-- **Coverage vs. reward-maximization tension**: a reward-maximizing
-  bandit concentrates attention on high-`p_b` bands; a weaker-but-real
-  emitter receives fewer (not zero) visits than a coverage-first policy
-  would give it. The scheduler is not claimed to optimally maximize
-  distinct-emitter coverage.
-- The scheduler cannot identify emitters — its statistics are band-level,
-  a coarser proxy than Phase 3's ground-truth-based per-emitter
-  interception scoring.
-- Discounted statistics do not predict a hopper's next frequency — they
-  only make recent evidence more influential than stale evidence.
-- Interception rate is evaluated externally, by the Phase 3 evaluator,
-  using ground truth the scheduler never sees.
-- Not claimed to be globally optimal for this problem.
-
-### Hyperparameter selection (not "training" in any neural-network sense)
-
-Three distinct, non-conflated activities: (A) **online learning**
-happens every episode via the update equations above — no loss function,
-no gradient, no dataset, no epochs; (B) **hyperparameter selection**: a
-fixed 12-combination grid (`gamma ∈ {0.90, 0.95, 0.99, 1.00}` ×
-`exploration_constant ∈ {0.5, 1.0, 2.0}`), each evaluated via Phase 3's
-existing, unmodified `run_repeated_trials()` on a fixed set of selection
-seeds, ranked by mean `interception_rate_active_emitters`; (C) **held-out
-evaluation**: the selected pair, run on seeds disjoint from selection.
-
-### Real hyperparameter selection results (20 selection seeds, `default_scenario(5)`, 200 steps)
+On every `update(observation, reward)` call (`reward` is accepted per
+the interface but unused — see "Reward" below):
 
 ```
-gamma    c   mean IR(active)   stdev   n_defined
- 0.9   0.5           1.0000  0.0000       20/20
- 0.9   1.0           1.0000  0.0000       20/20
- ...(9 of 12 candidates tie at 1.0000)...
- 1.0   1.0           0.9500  0.1221       20/20
-0.99   0.5           0.9167  0.1481       20/20
- 1.0   0.5           0.8000  0.1675       20/20
-SELECTED: gamma=0.9, c=0.5 (first max encountered in grid order)
-```
-Honest note: this benchmark scenario (3 emitters, 5 bands, 200 steps) is
-easy enough that 9 of 12 candidates tie at a perfect mean score — the
-selection procedure still works correctly (deterministic, auditable), but
-this scenario doesn't discriminate hyperparameters strongly. A harder
-scenario (more bands, shorter episodes, or a weaker emitter) would be
-needed to differentiate the grid further; not pursued here, since Phase 4
-scope is the mechanism, not scenario tuning.
-
-### Real held-out comparison (30 seeds, disjoint from the 20 selection seeds, gamma=0.9, c=0.5)
-
-```
-scheduler            Pd      Pfa    IR(active)  AvgInterceptTime
-round_robin        0.9916  0.0010     0.6667          1.5000
-random             0.9723  0.0012     1.0000          9.0778
-greedy_recent_hit  0.9813  0.0017     0.9778         22.0389
-adaptive_ucb       0.9855  0.0015     1.0000         16.2333
-
-Per-seed win/tie/loss on interception_rate_active_emitters (adaptive_ucb vs.):
-  round_robin:        30 win /  0 tie /  0 loss  (of 30)
-  random:               0 win / 30 tie /  0 loss  (of 30)
-  greedy_recent_hit:    2 win / 28 tie /  0 loss  (of 30)
+for every band:      S_b <- gamma * S_b ;  N_b <- gamma * N_b
+for the observed band b:
+    N_b <- N_b + 1
+    observed_b[b] <- True
+    if observation.detected:  S_b <- S_b + 1
 ```
 
-**Interpretation, stated honestly rather than as a superiority claim:**
+There is exactly one recency parameter, `gamma`; no separate EWMA
+smoothing constant exists. `gamma == 1.0` means no discounting —
+`S_b`/`N_b` behave as ordinary lifetime UCB1 running counts. `gamma < 1`
+means older observations lose influence geometrically; smaller `gamma`
+forgets faster.
 
-- Pd/Pfa are similar across all four schedulers (0.97–0.99 / 0.001–0.002)
-  — consistent with the formulation claim that scheduling policy
-  shouldn't meaningfully affect detector-side metrics. No red flags.
-- **A genuine, verified structural finding, not a general "ML wins"
-  result**: `round_robin` *deterministically never intercepts* the
-  `pulsed-1` emitter in this exact configuration (confirmed identical
-  across every seed tested, since RoundRobin's schedule and the pulsed
-  emitter's phase are both seed-independent). The cause is a resonance:
-  RoundRobin revisits band 2 every 5 steps (`t ≡ 3 mod 5`), and the
-  pulsed emitter (period 10, active window `[0,3)` mod 10) is only ever
-  active at `t mod 10 ∈ {0,1,2}` — RoundRobin's visits land on `t mod 10
-  ∈ {3, 8}`, permanently outside the active window. This is a real,
-  interesting scheduling-theory phenomenon (periodic-schedule aliasing
-  against a periodic source), not a general claim that adaptive UCB
-  "beats" round robin — it's specific to this exact `num_bands`/period
-  combination, and round robin's 30/0/0 loss record here is an artifact
-  of that resonance, not evidence of general inferiority.
-- `adaptive_ucb` and `random` both reach 1.0 interception (both keep
-  sampling all bands enough to eventually catch the pulsed emitter's
-  window, unlike round robin's fixed-phase blind spot).
-- **`average_intercept_time` is not directly comparable across schedulers
-  with different interception rates** — round robin's low 1.5 average is
-  computed only over the 2 emitters it ever finds (the easy ones), while
-  `adaptive_ucb`/`random`'s higher averages include the genuinely harder
-  pulsed emitter that round robin excludes entirely from its own average
-  by never finding it. This is exactly the kind of comparison pitfall
-  Phase 3's raw-counts-alongside-ratios design exists to make visible,
-  not hide.
-- `adaptive_ucb` vs. `greedy_recent_hit`: statistically close (mean 1.0 vs
-  0.978, adaptive_ucb ahead on 2/30 seeds, tied on 28/30) — a modest,
-  real difference, not a large one, reported as such.
+### Initialization / exploration priority
 
-### Files
+Before any UCB scoring: if any band has `observed_b[b] is False`, return
+the lowest-numbered such band, deterministically. This guarantees every
+band gets at least one observation before UCB scoring is used at all,
+and is checked before any division, log, or sqrt is computed.
 
-**Added**: `src/smart_scan_ew/scheduler/adaptive_ucb_scheduler.py`,
-`src/smart_scan_ew/evaluator/hyperparameter_selection.py`, and four test
-files. **Modified**: `scheduler/__init__.py` and `evaluator/__init__.py`
-(additive export-list changes only, to expose the new public classes/
-functions — no behavior change to anything previously exported).
-**Untouched**: every `interfaces/` file, every Phase 1/2/3 implementation
-file including `evaluator/experiment.py` and `evaluator/simple_evaluator.py`.
+### UCB score and `t`
+
+Once every band has been observed at least once:
+
+```
+p_b     = S_b / max(N_b, EPSILON)
+score_b = p_b + c * sqrt(ln(t) / max(N_b, EPSILON))
+```
+
+`t` is the 1-indexed episode-local decision count for the decision about
+to be made (`1 + number of update() calls so far this episode`). `t >= 1`
+always by construction, so `ln(t) >= 0` and the `sqrt` argument is never
+negative — independent of the `EPSILON` floor. `argmax(score)` is
+returned; ties are broken deterministically by lowest `band_id`.
+`select_band()` never mutates internal state — it is a pure function of
+the scheduler's current `S`/`N`/`observed`/`t`, so calling it repeatedly
+without an intervening `update()` always returns the same band.
+
+### Numerical safety
+
+`EPSILON = 1e-12`. Geometric decay of `N_b` by `gamma < 1` on every step
+(for every band, not just the one observed) means an unrevisited band's
+`N_b` shrinks toward, and — in IEEE-754 float64, after enough steps —
+eventually reaches exactly `0.0`. `max(N_b, EPSILON)` prevents this from
+ever causing a `ZeroDivisionError`, an invalid `sqrt`, or an invalid
+`log`. This floor is applied only when computing a score for an already-
+observed band; it is never used to decide whether a band has been
+observed at all — that distinction is made solely by the explicit
+`observed_b` flag, never by comparing `N_b` to zero (a "never observed"
+band and a "heavily discounted, `N_b` near/at zero" band are different
+things and must not be confused). Verified by
+`tests/test_adaptive_ucb_scheduler.py`'s numerical-safety tests, which
+run the scheduler for tens of thousands of steps and for enough
+`gamma < 1` decay steps to force an actual `N_b` underflow to `0.0`, and
+assert the resulting score stays finite and non-NaN.
+
+Discounting `S_b` and `N_b` by the same factor leaves their ratio `p_b`
+unchanged for a band not itself being updated — discounting alone never
+moves a band's point estimate. What it does do is (a) make a revisited
+band's estimate a genuine recency-weighted average, and (b) shrink an
+unvisited band's `N_b`, which grows its exploration bonus over time. No
+formal regret bound or "never permanently abandoned" guarantee is
+claimed — this is a standard, numerically-guarded heuristic.
+
+### Reward
+
+`update()`'s `reward` argument exists only because the `Scheduler`
+interface requires it; this scheduler reads `observation.detected`
+directly instead. A real receiver cannot distinguish a true positive
+from a false alarm without ground truth, which this scheduler must never
+see — so every detected observation is simply an observable detection,
+with no true/false qualification to learn from. No reward shaping
+(first-hit bonus, miss penalty, or anything ground-truth-derived) is
+used.
+
+### Objective mismatch (documented limitation, not a bug)
+
+This scheduler maximizes cumulative *observed* detections. The project's
+actual goal is to intercept as many distinct emitters as possible — but
+the scheduler cannot know emitter identity, only
+`Observation.detected`. A scenario with one strong emitter and one weak
+emitter may see the scheduler favor the strong one; this is an inherent
+property of a detection-reward bandit, not a defect. Discounting does
+**not** predict where a `FrequencyHoppingEmitter` will move next — it
+only makes recent evidence outweigh old evidence once a band is
+revisited.
+
+### Hyperparameters
+
+Grid: `gamma ∈ {0.90, 0.95, 0.99, 1.00}`, `c ∈ {0.5, 1.0, 2.0}` (12
+configurations). No additional hyperparameters.
+
+### Three distinct concepts (do not conflate)
+
+- **Online learning**: automatic, inside a single experiment run, driven
+  entirely by `update()` calls from the Phase 3 evaluator loop.
+- **Hyperparameter selection**: a grid search over the 12 configurations
+  above, using `run_repeated_trials()` (unchanged) on dedicated
+  selection-only master seeds — conventional grid search, not
+  neural-network-style training; nothing here performs gradient descent.
+- **Final held-out evaluation**: the frozen `(gamma, c)` re-evaluated on
+  a disjoint set of master seeds never used during selection.
+
+### Selection procedure (`examples/phase4_experiment.py`)
+
+Two-stage rule, deliberately not a weighted composite score:
+
+1. **Primary**: maximize mean `interception_rate_active_emitters` across
+   the selection seeds.
+2. **Near-tie rule**: among configurations within `0.02` absolute of the
+   best mean interception rate, choose the one with the lowest mean
+   `average_intercept_time`. A configuration with an undefined
+   (`None`) mean on either metric (no trial ever intercepted anything)
+   is treated as strictly worse than any configuration with a defined
+   value.
+
+### Held-out evaluation / four-way comparison
+
+`run_held_out_evaluation()` runs Round Robin, Random, Greedy Recent Hit,
+and the frozen Adaptive UCB via `run_repeated_trials()`, each across the
+identical list of held-out master seeds. Because `derive_seeds()`'s
+environment/receiver sub-seeds depend only on the master seed, never on
+which scheduler is under test, all four schedulers see byte-identical
+environment/receiver trajectories for a given seed — the same fairness
+property `compare_baselines()` provides for a single run, extended here
+across repeated trials and a fourth scheduler without modifying
+`evaluator/comparison.py`. Reports Pd, Pfa, both interception-rate
+variants, average intercept time, intercept time error, and average
+reward/cost, each with mean/stdev/min/max/`n_defined`
+(`SELECTION_SEEDS`/`HELD_OUT_SEEDS` are disjoint tuples, checked by a
+dedicated test).
+
+### Ground-truth isolation, extended again
+
+`adaptive_ucb.py` imports only `interfaces/` and the standard library —
+never `environment/` or `evaluator/`. Verified by
+`tests/test_phase4_ground_truth_isolation.py`: a structural test walks
+the module's AST for forbidden imports/identifiers, and a runtime spy
+test runs the complete environment → receiver → state → scheduler loop
+and asserts `get_ground_truth()` is called zero times.
+
+### File layout
+
+```
+src/smart_scan_ew/scheduler/adaptive_ucb.py   # AdaptiveUcbScheduler, EPSILON
+examples/phase4_experiment.py                  # selection, held-out eval, 4-way comparison
+tests/test_adaptive_ucb_scheduler.py           # unit + integration tests
+tests/test_phase4_ground_truth_isolation.py    # structural + runtime isolation tests
+```
+
+## Phase 5 — Dashboard (decisions of record)
+
+Approved by the project owner before implementation. Applies to
+`src/smart_scan_ew/dashboard/` (`controller.py`, `app.py`,
+`__init__.py`) and one additive change to
+`src/smart_scan_ew/scheduler/adaptive_ucb.py`. No `interfaces/`,
+`environment/`, `receiver/`, `state/`, `evaluator/`, or existing
+baseline `scheduler/` file was modified — confirmed by `git diff`.
+
+### Decision 1 — Adaptive UCB state access (additive, non-algorithmic)
+
+`AdaptiveUcbScheduler` gained two new, read-only members, purely for
+observability:
+
+- `get_diagnostics() -> tuple[BandUcbDiagnostics, ...]` — one frozen
+  `BandUcbDiagnostics` per band (`band_id`, `discounted_successes`,
+  `discounted_observations`, `observed`, `estimated_hit_rate`,
+  `exploration_bonus`, `ucb_score`). For an unobserved band, the last
+  three fields are `None` — the real algorithm never computes a UCB
+  score for such a band (see the unobserved-first branch in
+  `select_band()`), so reporting a number there would misrepresent the
+  actual decision rule.
+- `decision_count` — a read-only property returning `self._t` (the same
+  `t` `select_band()` uses internally, as `decision_index = decision_count + 1`).
+
+Implementation approach: `select_band()`'s per-band score computation
+(`n_safe = max(N_b, EPSILON); p_b = S_b/n_safe; bonus = c*sqrt(log_t/n_safe)`)
+was extracted, verbatim, into a private `_score_components(band_id, log_t)`
+helper. `select_band()` now calls this helper instead of inlining the
+same three lines; `get_diagnostics()` calls the identical helper for
+every observed band. This means there is exactly ONE implementation of
+the UCB formula in the class — a dashboard (or any future consumer)
+displaying a score can never drift from what the algorithm actually
+used to decide.
+
+**No algorithmic behavior changed.** The UCB equations, update order,
+initialization/exploration-priority rule, `gamma`/`c` semantics, tie-
+breaking, and `reset()` semantics are byte-for-byte identical before and
+after this refactor. Verified directly: the full 138-test pre-Phase-5
+suite was re-run immediately after the refactor, before any dashboard
+code existed, and still passed 138/138 — including the exact
+hand-calculation test (`test_ucb_score_matches_hand_calculation`) that
+would catch any numeric drift in the formula. New tests
+(`tests/test_adaptive_ucb_scheduler.py`'s "Phase 5 additive accessors"
+section) additionally verify: `get_diagnostics()` reports `None` for
+unobserved bands; its numbers exactly match the scheduler's internal
+`_S`/`_N` and the same hand-calculated formula; the band with the
+highest `ucb_score` among `get_diagnostics()`'s entries is always the
+band `select_band()` itself picks (once all bands are observed); the
+returned `BandUcbDiagnostics` tuple is immutable
+(`dataclasses.FrozenInstanceError` on assignment); calling
+`get_diagnostics()`/`decision_count` any number of times never mutates
+scheduler state; and `decision_count` has no setter.
+
+### Decision 2 — Four-way comparison does not import the Phase 4 script
+
+`dashboard/controller.py` does **not** import
+`examples/phase4_experiment.py` — that script is executable
+orchestration (a `main()` entry point meant to be run directly), not
+application code a UI should depend on. Instead,
+`controller.run_four_way_comparison()` is built directly on the same
+reusable Phase 3 evaluator APIs that script also uses —
+`ExperimentConfig`, `run_repeated_trials`, and (via
+`DashboardController.reset()`/`replay_metrics()`) `derive_seeds` — with
+no evaluator code duplicated or modified. A structural test
+(`tests/test_dashboard_controller.py::test_controller_module_does_not_import_phase4_experiment_script`)
+walks `controller.py`'s AST for import statements referencing
+`phase4_experiment` and asserts there are none.
+
+### Architecture: `controller.py` (no UI) / `app.py` (Streamlit)
+
+`controller.py` imports zero `streamlit` (checked structurally by a
+dedicated test) and contains all non-UI logic: it owns one
+`DashboardController` per live session, wrapping one real
+`SimpleRFEnvironment`, `SimpleReceiver`, `SimpleBeliefState`, and one of
+the four real `Scheduler` implementations (constructed via
+`_build_scheduler()` — a plain dispatch, no scheduler behavior
+reimplemented). `app.py` contains only Streamlit calls and formatting;
+it never touches simulation, scheduler, or evaluator logic directly —
+everything routes through the controller.
+
+`DashboardController.step()` performs exactly the same call sequence
+`SimpleEvaluator.run_experiment()` uses — `environment.step()` →
+`scheduler.select_band(state)` → `receiver.tune()`/`observe()` →
+`state.update()` → `scheduler.update()` — and computes `t` the same way
+(`self._time += dt`, matching `(step_index + 1) * dt`). This is why
+`DashboardController.replay_metrics()` (a fresh
+`run_experiment_for_scheduler()` call using the live session's exact
+seed/scenario/scheduler-type/hyperparameters) reproduces the live
+session's trajectory when given the same `num_steps` — verified
+directly (`test_replay_metrics_reproduces_the_exact_live_trajectory`,
+`test_replay_metrics_matches_a_direct_evaluator_call_with_the_same_config`),
+not just asserted in a comment. `replay_metrics()` always constructs a
+**fresh** scheduler instance for the replay — it never reuses or
+advances the live, already-stepped one.
+
+### "Why this band was selected" explanation
+
+`StepResult.decision_reason` (a `DecisionReason`) is built by
+`_explain_decision()`, which takes the band chosen this step and the
+`get_diagnostics()` snapshot taken **immediately before** `update()` was
+applied for that step — i.e. the exact internal state `select_band()`
+itself used. If that band's `observed` flag was `False` at that moment,
+`was_unobserved_band=True` and the score fields are `None` (mirroring
+the real algorithm never computing a score for it); otherwise the three
+score components are copied straight from that pre-update diagnostics
+entry. No second implementation of the algorithm exists anywhere in
+this path.
+
+### Live simulation view
+
+Built entirely from real objects: the time-frequency map's ground-truth
+layer comes from `DashboardController.peek_ground_truth()` (called by
+`app.py` after each `step()`, purely for display, and appended to a
+`st.session_state` list `app.py` owns — never read back into
+`controller.step()`); the receiver-visible layer (selected band,
+HIT/MISS) comes from `StepResult`/`Observation`. The belief-state panel
+comes from `SimpleBeliefState.get_features()` unchanged. The Adaptive UCB
+panel and "why" explanation come entirely from `get_diagnostics()`/
+`DecisionReason` (Decision 1). Undefined metrics (a `None` from
+`MetricStats`/`ExperimentResult`) render as the literal string `"N/A"`
+via one shared `format_metric()` helper in `app.py` — never silently
+converted to `0`; a real `0.0` still renders as `"0.000"`, not `"N/A"`
+(both directions tested).
+
+### Scenario presets
+
+`SCENARIO_PRESETS` in `controller.py` maps a display name to a
+`(num_bands) -> list[EmitterSpec]` builder. Every preset is a
+composition of the three EXISTING emitter kinds
+(`"cw"`/`"pulsed"`/`"hopping"`) already implemented in
+`environment/emitters.py` — "Default" reuses `default_scenario()`
+unchanged; "CW only" / "Pulsed only" / "Frequency hopping only" are new
+`EmitterSpec` lists using those same three kinds. No new emitter model
+was introduced (Part 14 of the approved brief).
+
+### Streamlit session-state handling
+
+The `DashboardController` instance lives in `st.session_state`, never a
+module-level global — the standard Streamlit multi-session-safety
+requirement. A fresh `controller.reset()` is triggered only when the
+resolved configuration tuple `(scheduler_name, scenario, num_bands,
+seed, gamma, c)` differs from `st.session_state.applied_config`, or when
+"Reset" is pressed — clicking "Step Once" or any button that doesn't
+touch those values causes zero resets (tested:
+`test_changing_scheduler_triggers_exactly_one_fresh_reset_not_a_reset_per_rerun`).
+"Start"/"Pause" implement a bounded auto-advance loop (`speed` steps,
+then `time.sleep(0.3)`, then `st.rerun()`) — this is the standard,
+if imperfect, way to get a "live" feel under Streamlit's
+rerun-per-interaction execution model, and is explicitly **not**
+claimed to be a smooth, frame-accurate animation. "Step Once" always
+works regardless of `running` state and is the reliable, precise control
+for a live demo walkthrough.
+
+### Ground-truth isolation, re-verified for the dashboard
+
+`DashboardController.step()`'s own source contains no
+`get_ground_truth`/`peek_ground_truth` call (structural test). A runtime
+spy (`_GroundTruthSpy`, the same pattern used in every previous phase's
+isolation tests) wraps the controller's environment and asserts zero
+`get_ground_truth()` calls across a full step loop, for all four
+scheduler choices. `peek_ground_truth()` — the one intentional call
+site — is verified to be additive only: interleaving it with `step()`
+calls doesn't change `step()`'s own zero-ground-truth-calls behavior,
+and its return value is never threaded back into `state`/`scheduler`.
+
+### Testing approach
+
+Three new test files, mirroring the existing one-file-per-concern
+convention:
+- `tests/test_dashboard_controller.py` — pure-Python logic tests (no
+  `streamlit` import), covering construction, scheduler selection,
+  reset, stepping, real-belief/real-diagnostics exposure, four-way
+  comparison, replay-metrics correctness, and `N/A` formatting.
+- `tests/test_dashboard_ground_truth_isolation.py` — structural +
+  runtime-spy isolation tests, matching the Phase 1/2/4 convention.
+- `tests/test_dashboard_app.py` — headless smoke tests using Streamlit's
+  own `streamlit.testing.v1.AppTest` (the officially supported way to
+  run a Streamlit script without a browser): confirms the app imports
+  and starts, all four scheduler choices step without error, the
+  Adaptive UCB panel and "why" explanation render, the four-way
+  comparison and performance buttons complete without exception using
+  real backend calls, and Reset/rerun behavior is predictable. This
+  caught one real bug during development — mixing `bool` and the
+  string `"N/A"` in one pandas column broke `st.dataframe`'s Arrow
+  serialization — fixed by rendering `last_detected` as a single
+  string type (`"HIT"`/`"MISS"`/`"N/A"`) in every row.
+
+### File layout
+
+```
+src/smart_scan_ew/scheduler/adaptive_ucb.py   # + BandUcbDiagnostics, get_diagnostics(), decision_count (additive)
+src/smart_scan_ew/dashboard/__init__.py        # re-exports the controller API
+src/smart_scan_ew/dashboard/controller.py      # all non-UI logic; zero streamlit import
+src/smart_scan_ew/dashboard/app.py             # Streamlit UI only
+tests/test_dashboard_controller.py             # logic tests
+tests/test_dashboard_ground_truth_isolation.py # structural + runtime isolation tests
+tests/test_dashboard_app.py                    # headless Streamlit AppTest smoke tests
+```
+
+### Known limitations
+
+- "Start"/"Pause" auto-run is a best-effort Streamlit rerun loop
+  (fixed steps + sleep + `st.rerun()`), not a guaranteed-smooth,
+  frame-accurate animation — a Streamlit architectural constraint, not
+  something this dashboard can fix without a different UI framework
+  (explicitly out of scope per Part 6).
+- The Performance tab's metrics are computed by a fresh
+  `run_experiment_for_scheduler()` replay of the current configuration,
+  not a running tally of the exact steps displayed in the Live
+  Simulation tab as they happen — they agree exactly when
+  `num_steps == len(history)` (verified), but the two panels are
+  computed independently, not from one shared incremental accumulator.
+- Scenario presets are a small, fixed set of compositions of the three
+  existing emitter kinds — not a general scenario editor.
 
 ## What is deliberately still NOT decided
 

@@ -3,7 +3,7 @@ ML-based Smart Scan Strategy for Electronic Warfare PS 26055 – SAH/SIH 2026
 
 ## Project status
 
-The project has completed Phase 4.
+The project has completed Phase 5.
 
 ### Phase 0 — Foundation
 Completed:
@@ -45,30 +45,72 @@ Completed:
 - Ground-truth isolation tests at the evaluator boundary
 - Phase 3 tests
 
-### Phase 4 — Learning-Based Scheduler
+### Phase 4 — Learning-based scheduler
 Completed:
-- AdaptiveUcbScheduler (Adaptive Discounted-UCB multi-armed bandit,
-  not a contextual bandit — no shared feature model across bands)
-- Discounted per-band statistics (S_b, N_b), UCB score with a scheduler-
-  owned ordinary decision counter t
-- reward argument accepted (interface requirement) but ignored;
-  observation.detected used directly
-- Hyperparameter grid search (gamma x exploration_constant), reusing
-  run_repeated_trials unmodified — not a neural-network training loop
-- Real held-out comparison against Round Robin, Random, and Greedy
-  Recent Hit, with honest, non-cherry-picked interpretation
-- No changes to any Phase 0-3 interface or to the Phase 3 evaluator/
-  reward framework
-- Full Phase 4 test suite, including ground-truth isolation
+- `AdaptiveUcbScheduler` — a non-stationary/recency-aware, discounted-UCB
+  multi-armed bandit (explicitly NOT a contextual bandit: independent
+  per-band statistics, no shared model). Learns online from
+  `observation.detected` only; never sees ground truth or `state`'s
+  contents.
+- Deterministic unobserved-band-first exploration, then
+  `score(b) = p_b + c*sqrt(ln(t)/N_b)` with an `EPSILON`-floored `N_b`
+  and an explicit `observed_b` flag, so long, unrevisited bands can
+  never trigger a division-by-zero or NaN/inf score.
+- Hyperparameter grid (`gamma in {0.90, 0.95, 0.99, 1.00}`,
+  `c in {0.5, 1.0, 2.0}`) selected on dedicated selection-only seeds via
+  a two-stage rule (max mean active-emitter interception rate, near-tie
+  broken by lowest mean intercept time — see `ARCHITECTURE.md`), then
+  frozen and evaluated on disjoint held-out seeds
+  (`examples/phase4_experiment.py`).
+- Four-way comparison against the three Phase 2 baselines using the
+  existing Phase 3 `run_repeated_trials()` — no evaluator code changed.
+- Ground-truth isolation tests (structural + runtime spy), matching the
+  Phase 1/2 convention.
+- Phase 4 tests.
+
+### Phase 5 — Dashboard
+Completed:
+- A Streamlit dashboard (`src/smart_scan_ew/dashboard/`) built entirely
+  on top of the existing Phase 1-4 components and Phase 3 evaluator
+  APIs — no simulation, scheduler, or evaluator logic was reimplemented.
+  `controller.py` holds all non-UI logic (zero `streamlit` import);
+  `app.py` is the UI.
+- Live, step-by-step simulation view: time-frequency map (with a
+  clearly labelled "GROUND TRUTH — EVALUATOR / DEBUG VIEW" panel, never
+  fed to the scheduler), latest observation, Phase 2 belief state, and —
+  for Adaptive UCB — a live per-band `S_b`/`N_b`/hit-rate/UCB-score
+  table and a "why this band was selected" explanation, both sourced
+  entirely from `AdaptiveUcbScheduler`'s new read-only
+  `get_diagnostics()`/`decision_count` accessors (an additive,
+  observability-only change — see `ARCHITECTURE.md`'s Phase 5 section;
+  no equation, update rule, or algorithmic behavior changed).
+- Real evaluator-backed Performance tab (`run_experiment_for_scheduler`)
+  and a Four-Way Comparison tab (`run_repeated_trials`, reusing the same
+  Phase 3 APIs `examples/phase4_experiment.py` uses — the dashboard does
+  not import that script). Undefined metrics render as `N/A`, never `0`.
+- Ground-truth isolation re-verified for the dashboard's own code path
+  (structural + runtime spy, matching the Phase 1/2/4 convention).
+- Phase 5 tests, including headless Streamlit `AppTest` smoke tests.
 
 ### Current phase
 
-Phase 4 complete. See ARCHITECTURE.md's "Phase 4" section for the full
-specification, known limitations, and real held-out experiment results.
+Phase 5 complete. See `ARCHITECTURE.md`'s "Phase 4" and "Phase 5"
+sections for the full algorithm/dashboard design, and this repo's known
+limitations (documented, not hidden): the UCB scheduler optimizes
+observable detections, not true interception count; the dashboard's
+"Start/Pause" auto-run is a best-effort Streamlit rerun loop, not a
+guaranteed-smooth animation (see `CLAUDE.md`).
 
 ### Running tests
 
 ```bash
 pip install -r requirements.txt
 pytest
+```
+
+### Running the dashboard
+
+```bash
+pip install -r requirements.txt
+streamlit run src/smart_scan_ew/dashboard/app.py
 ```
